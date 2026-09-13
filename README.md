@@ -1,92 +1,88 @@
-# autoresearch
+# AutoQuant Research
 
-![teaser](progress.png)
+量化版 autoresearch：`train.py` 保存可变策略，`autoquant/` 和 `configs/` 提供固定回测、验证与评分协议。本地 Backtrader 仓库只读。
 
-*One day, frontier AI research used to be done by meat computers in between eating, sleeping, having other fun, and synchronizing once in a while using sound wave interconnect in the ritual of "group meeting". That era is long gone. Research is now entirely the domain of autonomous swarms of AI agents running across compute cluster megastructures in the skies. The agents claim that we are now in the 10,205th generation of the code base, in any case no one could tell if that's right or wrong as the "code" is now a self-modifying binary that has grown beyond human comprehension. This repo is the story of how it all began. -@karpathy, March 2026*.
-
-The idea: give an AI agent a small but real LLM training setup and let it experiment autonomously overnight. It modifies the code, trains for 5 minutes, checks if the result improved, keeps or discards, and repeats. You wake up in the morning to a log of experiments and (hopefully) a better model. The training code here is a simplified single-GPU implementation of [nanochat](https://github.com/karpathy/nanochat). The core idea is that you're not touching any of the Python files like you normally would as a researcher. Instead, you are programming the `program.md` Markdown files that provide context to the AI agents and set up your autonomous research org. The default `program.md` in this repo is intentionally kept as a bare bones baseline, though it's obvious how one would iterate on it over time to find the "research org code" that achieves the fastest research progress, how you'd add more agents to the mix, etc. A bit more context on this project is here in this [tweet](https://x.com/karpathy/status/2029701092347630069) and [this tweet](https://x.com/karpathy/status/2031135152349524125).
-
-## How it works
-
-The repo is deliberately kept small and only really has three files that matter:
-
-- **`prepare.py`** — fixed constants, one-time data prep (downloads training data, trains a BPE tokenizer), and runtime utilities (dataloader, evaluation). Not modified.
-- **`train.py`** — the single file the agent edits. Contains the full GPT model, optimizer (Muon + AdamW), and training loop. Everything is fair game: architecture, hyperparameters, optimizer, batch size, etc. **This file is edited and iterated on by the agent**.
-- **`program.md`** — baseline instructions for one agent. Point your agent here and let it go. **This file is edited and iterated on by the human**.
-
-By design, training runs for a **fixed 5-minute time budget** (wall clock, excluding startup/compilation), regardless of the details of your compute. The metric is **val_bpb** (validation bits per byte) — lower is better, and vocab-size-independent so architectural changes are fairly compared.
-
-If you are new to neural networks, this ["Dummy's Guide"](https://x.com/hooeem/status/2030720614752039185) looks pretty good for a lot more context.
-
-## Quick start
-
-**Requirements:** A single NVIDIA GPU (tested on H100), Python 3.10+, [uv](https://docs.astral.sh/uv/).
+## 快速启动
 
 ```bash
-
-# 1. Install uv project manager (if you don't already have it)
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# 2. Install dependencies
-uv sync
-
-# 3. Download data and train tokenizer (one-time, ~2 min)
+uv sync --extra dev
+export BACKTRADER_ROOT=/Users/mac/PycharmProjects/backtrader
 uv run prepare.py
-
-# 4. Manually run a single training experiment (~5 min)
-uv run train.py
+uv run autoquant evaluate --strategy train.py
 ```
 
-If the above commands all work ok, your setup is working and you can go into autonomous research mode.
+默认示例采用 Backtrader 自带 ORCL 历史 CSV：2010、2011、2012 三个独立开发 fold，2013 最终留出区。示例用于验证软件，不是 ETF 数据、投资建议或经过认证的复权数据。每个 fold 重置资金和策略，预热 252 根，按下一根开盘撮合；评估段之前禁止交易。`train.py` 不直接执行回测，请用 CLI。
 
-## Running the agent
+## 自主循环
 
-Simply spin up your Claude/Codex or whatever you want in this repo (and disable all permissions), then you can prompt something like:
-
-```
-Hi have a look at program.md and let's kick off a new experiment! let's do the setup first.
-```
-
-The `program.md` file is essentially a super lightweight "skill".
-
-## Project structure
-
-```
-prepare.py      — constants, data prep + runtime utilities (do not modify)
-train.py        — model, optimizer, training loop (agent modifies this)
-program.md      — agent instructions
-pyproject.toml  — dependencies
+```bash
+uv run autoquant experiment --session artifacts/session-demo --iterations 3 --candidates /absolute/candidate_queue
+uv run autoquant experiment --session artifacts/session-ai --iterations 10 --generator '/absolute/provider --candidate {candidate} --context {context}'
 ```
 
-## Design choices
+如果任务由控制台创建，可附上 `--task-id <id>`，实验会自动关联到该任务，并把任务状态更新为 `running/completed`。
 
-- **Single file to modify.** The agent only touches `train.py`. This keeps the scope manageable and diffs reviewable.
-- **Fixed time budget.** Training always runs for exactly 5 minutes, regardless of your specific platform. This means you can expect approx 12 experiments/hour and approx 100 experiments while you sleep. There are two upsides of this design decision. First, this makes experiments directly comparable regardless of what the agent changes (model size, batch size, architecture, etc). Second, this means that autoresearch will find the most optimal model for your platform in that time budget. The downside is that your runs (and results) become not comparable to other people running on other compute platforms.
-- **Self-contained.** No external dependencies beyond PyTorch and a few small packages. No distributed training, no complex configs. One GPU, one file, one metric.
+结构化提示和 Gateway 模式：
 
-## Platform support
+```bash
+uv run autoquant experiment --session artifacts/session-brief --iterations 2 \
+  --brief examples/research_brief.json \
+  --generator '/absolute/provider --candidate {candidate} --brief {brief}'
+```
 
-This code currently requires that you have a single NVIDIA GPU. In principle it is quite possible to support CPU, MPS and other platforms but this would also bloat the code. I'm not 100% sure that I want to take this on personally right now. People can reference (or have their agents reference) the full/parent nanochat repository that has wider platform support and shows the various solutions (e.g. a Flash Attention 3 kernels fallback implementation, generic device support, autodetection, etc.), feel free to create forks or discussions for other platforms and I'm happy to link to them here in the README in some new notable forks section or etc.
+Gateway 强制要求 provider 同时接收候选和 brief 路径，记录 `agent_run.json`；候选会先通过 parent diff/复杂度门禁，再进入回测。旧的 `{context}` 生成器模式仍兼容，但只适合可信本地队列或已审计命令。
 
-Seeing as there seems to be a lot of interest in tinkering with autoresearch on much smaller compute platforms than an H100, a few extra words. If you're going to try running autoresearch on smaller computers (Macbooks etc.), I'd recommend one of the forks below. On top of this, here are some recommendations for how to tune the defaults for much smaller models for aspiring forks:
+队列包含按文件名排序的 `.py` 候选。生成器接收候选路径及 context.json，在候选目录工作，只修改其 train.py，并写 hypothesis.json。生成器由用户配置，可连接自己的模型/Agent；框架不内置模型凭证或付费请求。生成命令不经 shell 展开，超时会终止进程组。
 
-1. To get half-decent results I'd use a dataset with a lot less entropy, e.g. this [TinyStories dataset](https://huggingface.co/datasets/karpathy/tinystories-gpt4-clean). These are GPT-4 generated short stories. Because the data is a lot narrower in scope, you will see reasonable results with a lot smaller models (if you try to sample from them after training).
-2. You might experiment with decreasing `vocab_size`, e.g. from 8192 down to 4096, 2048, 1024, or even - simply byte-level tokenizer with 256 possibly bytes after utf-8 encoding.
-3. In `prepare.py`, you'll want to lower `MAX_SEQ_LEN` a lot, depending on the computer even down to 256 etc. As you lower `MAX_SEQ_LEN`, you may want to experiment with increasing `DEVICE_BATCH_SIZE` in `train.py` slightly to compensate. The number of tokens per fwd/bwd pass is the product of these two.
-4. Also in `prepare.py`, you'll want to decrease `EVAL_TOKENS` so that your validation loss is evaluated on a lot less data.
-5. In `train.py`, the primary single knob that controls model complexity is the `DEPTH` (default 8, here). A lot of variables are just functions of this, so e.g. lower it down to e.g. 4.
-6. You'll want to most likely use `WINDOW_PATTERN` of just "L", because "SSSL" uses alternating banded attention pattern that may be very inefficient for you. Try it.
-7. You'll want to lower `TOTAL_BATCH_SIZE` a lot, but keep it powers of 2, e.g. down to `2**14` (~16K) or so even, hard to tell.
+仓库带可直接验证循环的离线演示生成器（参数变化，不是 LLM）：
 
-I think these would be the reasonable hyperparameters to play with. Ask your favorite coding agent for help and copy paste them this guide, as well as the full source code.
+```bash
+uv run autoquant experiment --session artifacts/local-demo --iterations 2 --generator '/Users/mac/PycharmProjects/autoresearch/.venv/bin/python /Users/mac/PycharmProjects/autoresearch/examples/local_generator.py --candidate {candidate} --context {context}'
+```
 
-## Notable forks
+生成器的 hypothesis.json 必须包含非空意图说明，例如 `{"hypothesis":"降低调仓频率以减少换手"}`。冠军晋级还要求最差 Sharpe 恶化不超过 0.1、最大回撤恶化不超过 0.02（均为默认工程阈值）。
 
-- [miolini/autoresearch-macos](https://github.com/miolini/autoresearch-macos) (MacOS)
-- [trevin-creator/autoresearch-mlx](https://github.com/trevin-creator/autoresearch-mlx) (MacOS)
-- [jsegov/autoresearch-win-rtx](https://github.com/jsegov/autoresearch-win-rtx) (Windows)
-- [andyluo7/autoresearch](https://github.com/andyluo7/autoresearch) (AMD)
+同一 session 重新运行即续跑；每次指定新增实验次数。基线先评估，然后按固定 score（越高越好）和最小提升 0.03 晋级。失败、超时和 invalid 留痕；冠军保存在 session/champion.py，不覆盖工作区，不自动操作 Git。更换数据、引擎源码或固定框架后必须新建 session。
 
-## License
+## 数据与协议
 
-MIT
+`AUTOQUANT_CACHE_DIR` 默认 `~/.cache/autoquant`。快照首次生成后不覆盖；数据文件校验和、输入文件哈希、清单、切分进入实验 provenance。使用新 dataset ID 发布数据版本。
+
+导入自己的离线行情：每个 symbol 一个 CSV，列为 date,open,high,low,close,volume。基准也必须提供同样格式。
+
+```bash
+uv run prepare.py --dataset my_daily_v1 --source /absolute/csvs --splits /absolute/splits.json --benchmark BENCH
+uv run autoquant evaluate --dataset my_daily_v1 --strategy train.py
+```
+
+splits.json 是数组，例如 `[{"name":"dev1","profile":"dev","start":"2020-01-01","end":"2021-12-31"},{"name":"holdout","profile":"final","start":"2022-01-01","end":"2023-12-31"}]`。日期不得重叠，final 必须在 dev 之后。数据需额外包含预热历史；不同标的必须严格同日历，不自动填充可交易行情。策略 universe 必须使用快照中的代码。
+
+固定费用、滑点、资金、整手、预热、时限、评分与硬门槛在 configs/research.json。默认费用仅为演示，不代表任何市场现行费率。每个 fold 按基础和双倍成本各执行一次；综合中位数 Sharpe/Calmar/信息比率/年化超额，惩罚换手、离散度、最差 fold 和成本敏感度。所有压力场景均须通过最低交易/天数及回撤门槛。
+
+最终测试仅人工运行：`uv run autoquant evaluate --profile final --allow-final`。它不会参与冠军选择。此开关是流程隔离，不是文件权限隔离；同一用户仍可读取本地 holdout，强隔离需要独立账号/容器与数据服务。
+
+启动本地研究控制台：
+
+```bash
+uv run autoquant console --host 127.0.0.1 --port 8765
+```
+
+浏览器打开 `http://127.0.0.1:8765`，可以查看任务、实验、分数、策略版本、协议、净值和 artifacts，并为成功实验记录 final 审批。控制台当前仅适合本机使用，不包含登录认证，不应暴露到公网。
+
+审批完成后导出发布包：
+
+```bash
+uv run autoquant release --experiment-id <id> --artifact-dir /absolute/artifacts/<id> --output releases
+```
+
+发布包包含策略、请求、协议、summary、fold 结果、审批记录、paper registration 和新的 artifact manifest；它明确标记为 paper-only，不会启动实盘。
+
+## 产物与约束
+
+每次评估 artifacts/<id>/ 保存策略副本、request、provenance、summary、folds、日志、各 fold 净值 Parquet、订单/交易 JSON；错误含 traceback。results.tsv 是带文件锁的追加索引。session/state.json 是原子更新的恢复点。
+
+当前执行模型是 basic_next_open：长仓、市价单、现金约束、固定费用/滑点、零成交量禁止成交、整手检查；不支持融券、涨跌停队列、T+1、容量冲击、点时成分股/财务数据、真实公司行为。不得将其作为已完成 A 股生产级仿真。基准在策略数据外计算。
+
+AST 检查和禁用 preload 仅减少误用，不是安全沙箱；只能执行可信候选/生成器。策略仍可通过 Python 对象访问内部状态。不可信代码须外置容器断网、只读挂载协议、隔离最终数据。外部命令在用户权限下运行。当前控制台为依赖无关的本机 HTTP 服务，SQLite 只保存 lineage/审批元数据。
+
+这不是自动拟合 ML 模型的框架：当前 walk-forward 是逐段重置的固定策略 OOS 评估。未来可扩展独立 fit 契约；不要把回看预热误称为训练。paper trading、实盘接口、认证/RBAC、SSE/WebSocket 和完整 lineage 图仍未接入。

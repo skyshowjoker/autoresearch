@@ -1,0 +1,11 @@
+{
+  "objective": "降低趋势策略在震荡期的最大回撤",
+  "mode": "optimize",
+  "market": "demo_daily",
+  "universe": ["ORCL"],
+  "frequency": "1d",
+  "allowed_features": ["sma", "ema", "atr"],
+  "risk_limits": {"max_drawdown": 0.65},
+  "complexity_budget": {"max_lines_changed": 120, "max_indicators": 5},
+  "validation_profile": "dev"
+}
