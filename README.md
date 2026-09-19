@@ -2,6 +2,8 @@
 
 量化版 autoresearch：`train.py` 保存可变策略，`autoquant/` 和 `configs/` 提供固定回测、验证与评分协议。本地 Backtrader 仓库只读。
 
+完整实验操作流程见 [`docs/EXPERIMENT_OPERATION_MANUAL.md`](docs/EXPERIMENT_OPERATION_MANUAL.md)。
+
 ## 快速启动
 
 ```bash
