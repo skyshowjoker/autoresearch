@@ -20,20 +20,23 @@ from laboratory.agents.policy import DiffPolicy, inspect_candidate
 from laboratory.agents.optimization import OptimizationPlan
 from laboratory.budget import ExperimentBudget
 from laboratory.compare import compare_summaries
+from laboratory.git_cycle import SessionGitCycle
+from laboratory.research_themes import get_theme
+from laboratory.significance import paired_fold_significance
 from laboratory.storage import LineageStore
 
 
-def run_experiments(session, iterations, strategy, generator=None, candidates=None, dataset=None, brief=None, task_id=None):
+def run_experiments(session, iterations, strategy, generator=None, candidates=None, dataset=None, brief=None, task_id=None, theme=None):
     if iterations < 1:
         raise ValueError("iterations must be positive")
     session = Path(session).resolve()
     session.mkdir(parents=True, exist_ok=True)
     with (session / ".lock").open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        return _run(session, iterations, strategy, generator, candidates, dataset, brief, task_id)
+        return _run(session, iterations, strategy, generator, candidates, dataset, brief, task_id, theme)
 
 
-def _run(session, iterations, strategy, generator, candidates, dataset, brief=None, task_id=None):
+def _run(session, iterations, strategy, generator, candidates, dataset, brief=None, task_id=None, theme=None):
     config = load_config()
     lineage = LineageStore(ROOT / ".cache" / "laboratory.db") if task_id else None
     if lineage:
@@ -42,6 +45,7 @@ def _run(session, iterations, strategy, generator, candidates, dataset, brief=No
     dataset = dataset or config["dataset"]
     if brief is not None and not isinstance(brief, ResearchBrief):
         brief = ResearchBrief.from_dict(brief)
+    research_theme = get_theme(theme) if theme else None
     protocol, _ = protocol_identity(DatasetSnapshot.open(dataset), config)
     state_path = session / "state.json"
     if state_path.exists():
@@ -58,6 +62,7 @@ def _run(session, iterations, strategy, generator, candidates, dataset, brief=No
         champion = Path(baseline["artifact_dir"]) / "strategy.py"
         (session / "champion.py").write_bytes(champion.read_bytes())
         write_json(state_path, state)
+    git_cycle = SessionGitCycle(session, Path(state["best"]["artifact_dir"]) / "strategy.py")
     session_started = time.monotonic()
     no_improvement = int(state.get("no_improvement", 0))
     consecutive_failures = int(state.get("consecutive_failures", 0))
@@ -76,6 +81,8 @@ def _run(session, iterations, strategy, generator, candidates, dataset, brief=No
         best = state["best"]
         context = dict(iteration=number, best=state["best"], recent=state["events"][-10:],
                        instruction="Edit only candidate train.py; provide hypothesis.json. Never use final holdout.")
+        if research_theme:
+            context["research_theme"] = research_theme.__dict__
         write_json(candidate_dir / "context.json", context)
         started = time.monotonic()
         try:
@@ -127,7 +134,11 @@ def _run(session, iterations, strategy, generator, candidates, dataset, brief=No
                                parent_experiment_id=Path(best.get("artifact_dir", "")).name or None)
             if summary["protocol_id"] != protocol:
                 raise ValueError("evaluation protocol mismatch")
-            keep = should_promote(summary, best, config["scoring"])
+            significance = paired_fold_significance(
+                best.get("artifact_dir"), summary.get("artifact_dir"),
+                alpha=config["scoring"].get("significance_alpha", 0.2),
+                min_positive_fraction=config["scoring"].get("min_positive_fold_fraction", 0.5))
+            keep = should_promote(summary, best, config["scoring"], significance)
             decision = "keep" if keep else "discard" if summary["status"] == "success" else summary["status"]
             if keep:
                 state["best"] = summary
@@ -137,12 +148,14 @@ def _run(session, iterations, strategy, generator, candidates, dataset, brief=No
                 plan = OptimizationPlan.from_dict(hypothesis)
                 hypothesis = plan.__dict__
             event = dict(iteration=number, decision=decision, result=summary, hypothesis=hypothesis,
-                         diff=diff_report)
+                         diff=diff_report, significance=significance)
             event["comparison"] = compare_summaries(best, summary)
             record_lineage(Path(summary["artifact_dir"]).name, candidate, summary, decision,
                            Path(best.get("artifact_dir", "")).name or None, task_id)
         except Exception as exc:
             event = dict(iteration=number, decision="crash", reason=str(exc))
+        event["git"] = git_cycle.record(candidate, event["decision"], number,
+                                         {"theme": research_theme.name if research_theme else None})
         if event["decision"] == "keep":
             no_improvement = 0
             consecutive_failures = 0

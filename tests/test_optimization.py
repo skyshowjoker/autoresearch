@@ -11,6 +11,8 @@ from autoquant.prepare import prepare
 from laboratory.agents.optimization import OptimizationPlan
 from laboratory.budget import ExperimentBudget
 from laboratory.compare import compare_summaries
+from laboratory.git_cycle import SessionGitCycle
+from laboratory.significance import paired_fold_significance
 
 
 def test_optimization_plan_contract():
@@ -54,3 +56,30 @@ def test_optimize_brief_end_to_end(tmp_path, monkeypatch):
     assert event["hypothesis"]["action_type"] == "parameter"
     assert "comparison" in event
     assert (session / "candidate-00001" / "agent_run.json").exists()
+
+
+def test_significance_is_paired_and_deterministic(tmp_path):
+    parent, candidate = tmp_path / "parent", tmp_path / "candidate"
+    parent.mkdir(); candidate.mkdir()
+    parent_folds = [{"fold": f"f{i}", "cost_multiplier": 1, "metrics": {"score": 1.0}} for i in range(4)]
+    candidate_folds = [{"fold": f"f{i}", "cost_multiplier": 1, "metrics": {"score": 1.2}} for i in range(4)]
+    (parent / "folds.json").write_text(json.dumps(parent_folds))
+    (candidate / "folds.json").write_text(json.dumps(candidate_folds))
+    report = paired_fold_significance(str(parent), str(candidate), alpha=0.2)
+    assert report["passed"] and report["p_value"] == 1 / 16
+
+
+def test_session_git_cycle_keeps_and_discards_without_workspace_changes(tmp_path):
+    baseline = tmp_path / "train.py"
+    baseline.write_text("value = 1\n")
+    session = tmp_path / "session"
+    session.mkdir()
+    cycle = SessionGitCycle(session, baseline)
+    candidate = session / "candidate.py"
+    candidate.write_text("value = 2\n")
+    kept = cycle.record(candidate, "keep", 1)
+    assert kept["decision"] == "keep" and (session / "active_train.py").read_text() == "value = 2\n"
+    candidate.write_text("value = 3\n")
+    discarded = cycle.record(candidate, "discard", 2)
+    assert discarded["decision"] == "discard" and (session / "active_train.py").read_text() == "value = 2\n"
+    assert baseline.read_text() == "value = 1\n"

@@ -1,6 +1,6 @@
 # Implementation status
 
-Last updated: 2026-09-13
+Last updated: 2026-09-19
 
 ## Completed
 
@@ -30,6 +30,9 @@ Last updated: 2026-09-13
 - Promotion gate includes score improvement, worst-fold Sharpe and drawdown stability.
 - Experiment budgets: maximum trials, runtime, consecutive no-improvement and consecutive failure limits.
 - Durable session counters and automatic stop reasons.
+- Paired development-fold significance gate with deterministic sign permutation.
+- Session-local Git keep/discard ledger; the user workspace remains unchanged.
+- Staged research themes: baseline, robustness, signal, risk and paper.
 
 ## Verification
 
@@ -61,3 +64,10 @@ Last updated: 2026-09-13
 - Added final-only approval gate, paper registration and auditable release package export.
 - Added CLI/API release export with release manifest and explicit paper-only warning.
 - Real final evaluation, live market paper feed, broker reconciliation and pre-live checklist remain pending.
+
+### Delivery route verification
+
+- Stage 1 gate passed on 2026-09-19: two identical development baselines produced the same protocol, score, strategy hash and orders.
+- Stage 2 tests cover walk-forward folds, multi-cost evaluation, future-index rejection, artifacts and subprocess timeout isolation.
+- Stage 3 end-to-end demo recorded theme context, paired significance evidence and `git-events.jsonl` in a session.
+- Stage 4 now includes a BackQuant SQLite adapter (`autoquant_strategies`) and an append-only chronological paper replay ledger. Live market feed and broker reconciliation remain future work.

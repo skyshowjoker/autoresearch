@@ -146,6 +146,21 @@ class ConsoleHandler(BaseHTTPRequestHandler):
                 return self._send_json({"status": "released", "path": str(release_dir)}, HTTPStatus.CREATED)
             except ReleaseError as exc:
                 return self._send_json({"error": str(exc)}, HTTPStatus.CONFLICT)
+        if path.startswith("/api/experiments/") and path.endswith("/register-backquant"):
+            experiment_id = path.split("/")[3]
+            record = self.store.get_experiment(experiment_id)
+            if record is None:
+                return self._send_json({"error": "experiment not found"}, HTTPStatus.NOT_FOUND)
+            if not any(item.get("action") == "approve-final" for item in self.store.list_approvals(experiment_id)):
+                return self._send_json({"error": "final approval is required before BackQuant registration"}, HTTPStatus.CONFLICT)
+            try:
+                from .backquant import register_champion
+                artifact_dir = Path(record["artifact_dir"])
+                result = register_champion(experiment_id=experiment_id, strategy_path=artifact_dir / "strategy.py",
+                                           artifact_dir=artifact_dir)
+                return self._send_json(result, HTTPStatus.CREATED)
+            except (KeyError, ValueError) as exc:
+                return self._send_json({"error": str(exc)}, HTTPStatus.CONFLICT)
         if not path.startswith("/api/experiments/") or not path.endswith("/approve-final"):
             return self._send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
         experiment_id = path.split("/")[3]

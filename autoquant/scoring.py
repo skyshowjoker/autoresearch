@@ -1,12 +1,13 @@
 import numpy as np
 
 
-def should_promote(candidate, champion, config):
+def should_promote(candidate, champion, config, significance=None):
     if candidate["status"] != "success":
         return False
     if champion["status"] != "success":
         return True
-    return (candidate["score"] >= champion["score"] + config["min_improvement"]
+    return ((significance is None or significance.get("passed", False))
+            and candidate["score"] >= champion["score"] + config["min_improvement"]
             and candidate["worst_sharpe"] >= champion["worst_sharpe"] - config["max_worst_sharpe_degradation"]
             and candidate["max_drawdown"] <= champion["max_drawdown"] + config["max_drawdown_degradation"])
 
